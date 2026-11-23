@@ -1,0 +1,7 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jobs feed</title></head>
+<body style="font:16px/1.5 system-ui;max-width:640px;margin:40px auto;padding:0 16px">
+<h1>Development Jobs Atlas — jobs feed</h1>
+<p>This site serves <a href="jobs.json">jobs.json</a>, refreshed daily from UN Careers and ReliefWeb for the jobs map on <a href="https://khounkham.org">khounkham.org</a>.</p>
+<p id="s">Loading…</p>
+<script>fetch("jobs.json").then(r=>r.json()).then(d=>{document.getElementById("s").textContent=`${d.count} open jobs · updated ${d.generated} · sources: ${Object.entries(d.sources).map(([k,v])=>k+" "+v).join(", ")}`}).catch(()=>{document.getElementById("s").textContent="jobs.json not available yet."})</script>
+</body></html>
