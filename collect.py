@@ -8,6 +8,7 @@ Sources
   - UN Careers RSS (all UN Secretariat openings): https://careers.un.org/jobfeed
   - ReliefWeb Jobs RSS (UN agencies, NGOs, Red Cross ...): https://reliefweb.int/jobs/rss.xml
     plus one search feed per country in COUNTRY_SEARCHES for wider coverage
+  - UNICEF Careers RSS (all UNICEF vacancies, official PageUp feed): https://careers.pageuppeople.com/671/cw/en-us/rss
   - Optional: the ReliefWeb API, used instead of RSS when the repository secret
     RW_APPNAME holds an approved appname (gives complete, structured data).
 
@@ -32,6 +33,7 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "jobs.jso
 TODAY = dt.date.today()
 
 UN_FEED = "https://careers.un.org/jobfeed"
+UNICEF_FEED = "https://careers.pageuppeople.com/671/cw/en-us/rss"
 RW_FEED = "https://reliefweb.int/jobs/rss.xml"
 # Extra ReliefWeb search feeds widen coverage beyond the newest items.
 COUNTRY_SEARCHES = [
@@ -87,7 +89,7 @@ CITY_FIXES = {  # UN duty-station spellings → gazetteer names
     "almaty alma ata": "Almaty", "mogadiscio": "Mogadishu", "ndjamena": "N'Djamena",
     "nuku alofa": "Nuku‘alofa", "ashkhabad": "Ashgabat", "cox s bazaar": "Cox's Bazar",
     "coxs bazaar": "Cox's Bazar", "east jerusalem": "Jerusalem", "port au prince": "Port-au-Prince",
-    "dar es salaam": "Dar es Salaam", "the hague": "The Hague", "jakarta pusat": "Jakarta",
+    "dar es salaam": "Dar es Salaam", "nyhq": "New York City", "new york hq": "New York City", "nyc": "New York City", "the hague": "The Hague", "jakarta pusat": "Jakarta",
 }
 
 def country_from_text(text):
@@ -175,7 +177,7 @@ def parse_date(s):
 
 def field(blob, *labels):
     for lab in labels:
-        m = re.search(rf"{lab}\s*:\s*([^\n<]+)", blob, flags=re.I)
+        m = re.search(rf"{lab}[ \t]*:[ \t]*([^\n<]*\S)", blob, flags=re.I)
         if m:
             return m.group(1).strip()
     return ""
@@ -201,6 +203,49 @@ def from_un_careers():
             "posted": (parse_date(field(d, "Posted Date")) or TODAY).isoformat(),
             "url": text(it, "link") or text(it, "guid"),
             "src": "UN Careers",
+        })
+    return out
+
+def local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+GRADE_RE = re.compile(r"\b(ASG|USG|[PDG]-?[1-7]|NO-?[A-E]|GS-?[1-7])\b")
+
+def from_unicef():
+    """UNICEF's own vacancy feed (PageUp). Fields arrive as job:* elements."""
+    raw = fetch(UNICEF_FEED)
+    if not raw:
+        return []
+    out = []
+    for it in ET.fromstring(raw).iter("item"):
+        f = {}
+        for ch in it:
+            f.setdefault(local(ch.tag), (ch.text or "").strip())
+        title = html.unescape(f.get("title", "")).strip()
+        loc = f.get("location", "")                       # e.g. "Headquarters|Denmark", "Eastern and Southern Africa|Kenya"
+        country = loc.split("|")[-1].strip() if loc else ""
+        iso2 = country_iso2(country) or country_from_text(title)
+        g = None
+        # the duty station is usually one of the comma-separated parts of the title
+        for part in reversed(re.split(r"[,;/]| - ", title)):
+            part = re.sub(r"#\d+|\(.*?\)|\d+\s*(months?|mois|meses)|remote|home.?based|\bUNICEF\b", " ", part, flags=re.I).strip(" -–")
+            if 2 < len(part) < 40:
+                g2 = geocode(part, iso2)
+                if g2 and g2[0]:
+                    g = g2
+                    break
+        if not g and iso2:
+            g = (None, iso2, None, None)
+        m = GRADE_RE.search(title.upper())
+        grade = " · ".join(x for x in [m.group(1) if m else "", f.get("workType", "")] if x)
+        cats = [c.split("|")[-1].strip() for c in f.get("category", "").split(",") if c.strip()]
+        close = parse_date(f.get("closingDate", ""))
+        out.append({
+            "t": re.sub(r"\s*#\d+\s*$", "", title), "org": "UNICEF", "grade": grade,
+            "cat": " · ".join(dict.fromkeys(cats)), "station": "", "geo": g,
+            "close": close.isoformat() if close else "",
+            "posted": (parse_date(f.get("pubDate", "")) or TODAY).isoformat(),
+            "url": f.get("link", "") or f.get("guid", ""), "src": "UNICEF Careers",
         })
     return out
 
@@ -286,6 +331,9 @@ def main():
     print("UN Careers …")
     un = from_un_careers(); sources["UN Careers"] = len(un)
     print(f"  {len(un)} items")
+    print("UNICEF Careers …")
+    uc = from_unicef(); sources["UNICEF Careers"] = len(uc)
+    print(f"  {len(uc)} items")
     if appname:
         print("ReliefWeb API …"); rw = from_reliefweb_api(appname)
     else:
@@ -293,8 +341,18 @@ def main():
     sources["ReliefWeb"] = len(rw)
     print(f"  {len(rw)} items")
 
+    # remember when each job was first collected, so the map can flag new jobs
+    prev = {}
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            old = json.load(f)
+        for oj in old.get("jobs", []):
+            prev[oj.get("url")] = oj.get("first_seen") or oj.get("posted") or TODAY.isoformat()
+    except (OSError, ValueError):
+        pass
+
     seen, jobs, unplaced = set(), [], 0
-    for j in un + rw:
+    for j in un + uc + rw:
         if not j["url"] or j["url"] in seen or not j["t"]:
             continue
         seen.add(j["url"])
@@ -304,6 +362,7 @@ def main():
                     continue
             except ValueError:
                 j["close"] = ""
+        j["first_seen"] = prev.get(j["url"]) or (TODAY.isoformat() if prev else j.get("posted") or TODAY.isoformat())
         g = j.pop("geo")
         if not g:
             unplaced += 1
@@ -323,6 +382,7 @@ def main():
         "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
         "sources": sources,
         "count": len(jobs),
+        "new_today": sum(1 for j in jobs if j["first_seen"] == TODAY.isoformat()),
         "unplaced": unplaced,
         "attribution": "Job data: UN Careers (careers.un.org) and ReliefWeb (reliefweb.int, UN OCHA). Places: GeoNames (CC BY 4.0).",
         "jobs": jobs,
