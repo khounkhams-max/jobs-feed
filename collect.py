@@ -211,6 +211,11 @@ def local(tag):
 
 GRADE_RE = re.compile(r"\b(ASG|USG|[PDG]-?[1-7]|NO-?[A-E]|GS-?[1-7])\b")
 
+def unicef_url(u):
+    """Old PageUp job links now redirect to the generic search page; use the job's own page on jobs.unicef.org."""
+    m = re.search(r"pageuppeople\.com/671/[^/]+/[^/]+/job/(\d+)", u or "")
+    return f"https://jobs.unicef.org/en-us/job/{m.group(1)}" if m else u
+
 def from_unicef():
     """UNICEF's own vacancy feed (PageUp). Fields arrive as job:* elements."""
     raw = fetch(UNICEF_FEED)
@@ -245,7 +250,7 @@ def from_unicef():
             "cat": " · ".join(dict.fromkeys(cats)), "station": "", "geo": g,
             "close": close.isoformat() if close else "",
             "posted": (parse_date(f.get("pubDate", "")) or TODAY).isoformat(),
-            "url": f.get("link", "") or f.get("guid", ""), "src": "UNICEF Careers",
+            "url": unicef_url(f.get("link", "") or f.get("guid", "")), "src": "UNICEF Careers",
         })
     return out
 
