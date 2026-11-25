@@ -324,6 +324,104 @@ def from_reliefweb_api(appname):
         offset += 1000
     return jobs
 
+# ---------------------------------------------------------------- alert feeds
+# Ready-made RSS feeds people can follow in a feed reader or an RSS-to-email
+# service of their choice. Nobody's personal data passes through this project.
+SITE = "https://www.khounkham.org/dev-jobs"
+AREAS = [
+    ("fin", "Finance, budget & accounting", r"financ|budget|account|treasur|payroll|fiscal|comptab|contabil|tesorer"),
+    ("audit", "Audit, oversight & ethics", r"audit|oversight|investigat|ethic|complian|risk|fraud|integrit|inspect"),
+    ("hr", "Human resources", r"human resource|\bhr\b|recruit|talent|staff development|people (and|&) culture|ressources humaines|recursos humanos"),
+    ("supply", "Supply chain, procurement & logistics", r"supply|procure|logistic|warehouse|fleet|shipping|customs|contract management|approvisionnement|achat|adquisicion|compras"),
+    ("admin", "Administration & operations", r"admin|operations|office manag|facilit|driver|clerk|assistant|secretar|travel|general service|support officer"),
+    ("it", "IT, data & digital", r"\bit\b|information tech|\bict\b|digital|software|developer|data|database|cyber|\bgis\b|systems|analytics|information management|technolog"),
+    ("prog", "Programme & project management", r"programme|program|project|coordinat|portfolio|grant|manager|programa|proyecto|projet"),
+    ("mel", "Monitoring, evaluation & research", r"monitor|evaluat|\bm&e\b|\bmeal\b|research|survey|statistic|knowledge|analys|assessment|suivi|investigaci"),
+    ("comms", "Communications & advocacy", r"communicat|media|advoca|editor|writer|public information|outreach|campaign|content|social media|press"),
+    ("part", "Partnerships & resource mobilization", r"partnership|resource mobili|fundrais|donor|business development|private sector"),
+    ("health", "Health & nutrition", r"health|medic|nurse|doctor|nutrition|epidemi|clinic|pharmac|hiv|malaria|tuberc|immuni|vaccin|santé|salud|mental"),
+    ("wash", "Water, sanitation & hygiene", r"\bwash\b|water|sanitat|hygien|\beau\b|agua"),
+    ("edu", "Education", r"educat|teacher|school|learning|éducation|educaci"),
+    ("prot", "Protection & child protection", r"protect|child|gbv|gender.based|safeguard|psychosocial|case work|caseworker|refugee status|resettlement|protecci"),
+    ("hum", "Humanitarian & emergency", r"humanitarian|emergenc|crisis|disaster|relief|preparedness|response|\bcash\b|shelter|\bcamp\b|urgence|emergencia"),
+    ("food", "Food security, agriculture & livelihoods", r"food|agricult|livelihood|farm|rural|fisher|livestock|resilien"),
+    ("env", "Environment, climate & energy", r"environment|climate|energy|biodivers|sustainab|forest|ocean|renewable|carbon|ambient|climat"),
+    ("econ", "Economics, policy & governance", r"econom|policy|governance|public financ|trade|development effect|planning|poverty|social protection|politi|gobernanza"),
+    ("legal", "Legal & human rights", r"legal|lawyer|counsel|juris|human rights|justice|rule of law|jurid|derecho"),
+    ("gender", "Gender & inclusion", r"gender|women|inclusion|disabilit|diversity|equality"),
+    ("eng", "Engineering & infrastructure", r"engineer|infrastruct|construct|architect|civil works|technician|electric|mechanic|ingénieur|ingenier"),
+    ("sec", "Security & safety", r"security|safety|guard|seguridad|sécurité"),
+    ("lang", "Languages & conference services", r"translat|interpret|verbatim|conference|langu|traduct"),
+    ("peace", "Political affairs & peacebuilding", r"political|peace|mediat|conflict|electoral|civil affairs|disarm|demobil"),
+]
+AREA_RE = [(k, n, re.compile(p, re.I)) for k, n, p in AREAS]
+LEVELS = {"P": "Professional (P)", "NO": "National Officer (NO)", "G": "General Service (G)", "D": "Director (D)",
+          "CON": "Consultancy", "INT": "Internship"}
+
+def areas_of(j):
+    text = j["t"] + (" | " + j.get("cat", "") if j.get("cat") else "")
+    out = []
+    for k, _, rx in AREA_RE:
+        if rx.search(text):
+            if k == "sec" and re.search(r"(food|nutrition|social|water|energy) security", text, re.I) and not re.search(r"\bsecurity (officer|assistant|advisor|adviser|analyst|coordinator|manager|specialist)", text, re.I):
+                continue
+            out.append(k)
+    return out
+
+def level_of(j):
+    g, x = j.get("grade", "").upper(), (j.get("grade", "") + " | " + j["t"]).upper()
+    if re.search(r"\b(ASG|USG|D-?[12])\b", g): return "D"
+    if re.search(r"\bP-?[1-6]\b", g): return "P"
+    if re.search(r"\bNO-?[A-E]\b|NATIONAL OFFICER", g): return "NO"
+    if re.search(r"\bG-?[1-7]\b|\bGS-?\d\b|GENERAL SERVICE", g): return "G"
+    if re.search(r"\bI-?1\b|\bINTERN(S|SHIP|SHIPS)?\b|\bSTAGIAIRE\b|\bPASANT", x): return "INT"
+    if re.search(r"\bCON\b|CONSULT|\bIC\b|INDIVIDUAL CONTRACT|LICA|IICA", x): return "CON"
+    if re.search(r"\bP-?[1-6]\b", j["t"].upper()): return "P"
+    return ""
+
+def rss(path, title, jobs):
+    from email.utils import format_datetime
+    items = []
+    for j in sorted(jobs, key=lambda j: (j.get("first_seen", ""), j["close"]), reverse=True)[:100]:
+        where = ", ".join(x for x in [j.get("city"), j.get("country")] if x)
+        bits = [b for b in [j.get("org"), where, j.get("grade"), ("closes " + j["close"]) if j.get("close") else ""] if b]
+        d = dt.datetime.fromisoformat((j.get("first_seen") or TODAY.isoformat()) + "T06:00:00+00:00")
+        items.append(
+            "<item><title>{}</title><link>{}</link><guid isPermaLink=\"true\">{}</guid><pubDate>{}</pubDate><description>{}</description></item>".format(
+                html.escape(f'{j["t"]} — {j.get("org","")}' + (f" ({where})" if where else "")), html.escape(j["url"]), html.escape(j["url"]),
+                format_datetime(d), html.escape(" · ".join(bits))))
+    xml = ('<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0"><channel>'
+           f"<title>{html.escape(title)} — Development Jobs Atlas</title><link>{SITE}</link>"
+           f"<description>{html.escape(title)}. Collected daily from UN Careers, UNICEF Careers and ReliefWeb. Always apply on the employer's official site.</description>"
+           f"<lastBuildDate>{dt.datetime.now(dt.timezone.utc).strftime('%a, %d %b %Y %H:%M:%S +0000')}</lastBuildDate>"
+           + "".join(items) + "</channel></rss>")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(xml)
+
+def write_feeds(jobs):
+    base = os.path.join(os.path.dirname(OUT), "feeds")
+    os.makedirs(base, exist_ok=True)
+    for old in os.listdir(base):
+        os.remove(os.path.join(base, old))
+    index = {"all": {"title": "All new development jobs", "count": len(jobs)}}
+    rss(os.path.join(base, "all.xml"), "All new development jobs", jobs)
+    by = {}
+    for j in jobs:
+        if j.get("iso"):
+            by.setdefault(("country", j["iso"], j.get("country") or j["iso"]), []).append(j)
+        for a in areas_of(j):
+            by.setdefault(("area", a, dict((k, n) for k, n, _ in AREAS)[a]), []).append(j)
+        lv = level_of(j)
+        if lv:
+            by.setdefault(("level", lv, LEVELS[lv]), []).append(j)
+    for (kind, key, name), js in by.items():
+        title = {"country": f"Jobs in {name}", "area": f"{name} jobs", "level": f"{name} jobs"}[kind]
+        rss(os.path.join(base, f"{kind}-{key}.xml"), title, js)
+        index[f"{kind}-{key}"] = {"title": title, "count": len(js)}
+    with open(os.path.join(base, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"Wrote {len(index)} alert feeds → {base}")
+
 # ---------------------------------------------------------------- main
 def main():
     appname = os.environ.get("RW_APPNAME", "").strip()
@@ -394,6 +492,7 @@ def main():
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
     print(f"Wrote {len(jobs)} jobs ({unplaced} without a location) → {OUT}")
+    write_feeds(jobs)
 
 if __name__ == "__main__":
     main()
