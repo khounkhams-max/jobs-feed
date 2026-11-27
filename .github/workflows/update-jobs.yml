@@ -2,7 +2,7 @@ name: Update jobs
 
 on:
   schedule:
-    - cron: "17 4 * * *"   # every day at 04:17 UTC
+    - cron: "17 * * * *"   # every hour, at 17 minutes past
   workflow_dispatch:         # "Run workflow" button in the Actions tab
   push:
     paths: ["collect.py", ".github/workflows/update-jobs.yml"]
@@ -26,11 +26,11 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Collect jobs
         env:
-          RW_APPNAME: ${{ secrets.RW_APPNAME }}
+          RW_APPNAME: ${{ secrets.RW_APPNAME }}   # optional; leave unset to use the RSS feeds
         run: python collect.py
       - name: Commit jobs.json
         run: |
           git config user.name "jobs-bot"
           git config user.email "jobs-bot@users.noreply.github.com"
           git add docs/jobs.json docs/feeds
-          git diff --cached --quiet && echo "No changes" || git commit -m "Update jobs $(date -u +%F)" && git push
+          git diff --cached --quiet && echo "No changes" || git commit -m "Update jobs $(date -u +%F\ %H:%M)" && git push
